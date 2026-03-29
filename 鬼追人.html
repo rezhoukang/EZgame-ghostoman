@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>鬼追人</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+            font-family: Arial, 'Microsoft YaHei', sans-serif;
+        }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 800, H = 600;
+canvas.width = W; canvas.height = H;
+
+function resize() {
+    const s = Math.min(innerWidth / W, innerHeight / H);
+    canvas.style.width = W * s + 'px';
+    canvas.style.height = H * s + 'px';
+}
+addEventListener('resize', resize); resize();
+
+// 粒子
+const dots = Array.from({length: 25}, () => ({
+    x: Math.random() * W, y: Math.random() * H,
+    vx: (Math.random() - .5) * .4, vy: (Math.random() - .5) * .4,
+    r: Math.random() * 3 + 1, a: Math.random() * .25
+}));
+
+let t = 0;
+const btns = [
+    { label: '开始游戏', color: '#22b573', hover: '#2edc8a', action() { location.replace('游戏.html'); } },
+    { label: '游戏说明', color: '#3498db', hover: '#5dade2', action() { location.replace('游戏说明.html'); } },
+    { label: '游戏设置', color: '#9b59b6', hover: '#af7ac5', action() { location.replace('游戏设置.html'); } },
+];
+const btnW = 240, btnH = 54, btnGap = 80, btnStartY = 300;
+let hoverIdx = -1;
+
+function drawRR(x, y, w, h, r, fill, stroke) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+    if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); }
+}
+
+function loop() {
+    t += .02;
+    ctx.fillStyle = '#0a0a1a';
+    ctx.fillRect(0, 0, W, H);
+
+    // 网格
+    ctx.strokeStyle = 'rgba(60,30,100,.2)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+    for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+
+    // 粒子
+    dots.forEach(p => {
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < 0) p.x = W; if (p.x > W) p.x = 0;
+        if (p.y < 0) p.y = H; if (p.y > H) p.y = 0;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.28);
+        ctx.fillStyle = `rgba(255,70,70,${p.a})`; ctx.fill();
+    });
+
+    // 标题 —— 鬼追人 三个大字
+    const s = 1 + Math.sin(t) * .03;
+    ctx.save();
+    ctx.translate(W / 2, 150);
+    ctx.scale(s, s);
+    ctx.font = 'bold 100px Arial, Microsoft YaHei';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#000'; ctx.fillText('鬼追人', 4, 4);
+    ctx.fillStyle = '#ff4757'; ctx.fillText('鬼追人', 0, 0);
+    ctx.restore();
+
+    // 按钮
+    btns.forEach((b, i) => {
+        const by = btnStartY + i * btnGap;
+        const isH = hoverIdx === i;
+        const sc = isH ? 1.06 : 1;
+
+        ctx.save();
+        ctx.translate(W / 2, by + btnH / 2);
+        ctx.scale(sc, sc);
+        drawRR(-btnW/2 + 3, -btnH/2 + 3, btnW, btnH, 14, 'rgba(0,0,0,.3)');
+        drawRR(-btnW/2, -btnH/2, btnW, btnH, 14, isH ? b.hover : b.color);
+        if (isH) drawRR(-btnW/2, -btnH/2, btnW, btnH, 14, null, 'rgba(255,255,255,.5)');
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 24px Arial, Microsoft YaHei';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(b.label, 0, 1);
+        ctx.restore();
+    });
+
+    requestAnimationFrame(loop);
+}
+
+function pos(e) {
+    const r = canvas.getBoundingClientRect();
+    return { x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height };
+}
+function hitBtn(mx, my) {
+    for (let i = 0; i < btns.length; i++) {
+        const bx = W/2 - btnW/2, by = btnStartY + i * btnGap;
+        if (mx >= bx && mx <= bx + btnW && my >= by && my <= by + btnH) return i;
+    }
+    return -1;
+}
+canvas.addEventListener('mousemove', e => {
+    const p = pos(e); hoverIdx = hitBtn(p.x, p.y);
+    canvas.style.cursor = hoverIdx >= 0 ? 'pointer' : 'default';
+});
+canvas.addEventListener('click', e => { const p = pos(e); const i = hitBtn(p.x, p.y); if (i >= 0) btns[i].action(); });
+canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const tt = e.touches[0], r = canvas.getBoundingClientRect();
+    const p = { x: (tt.clientX - r.left) * W / r.width, y: (tt.clientY - r.top) * H / r.height };
+    const i = hitBtn(p.x, p.y); if (i >= 0) btns[i].action();
+}, { passive: false });
+
+loop();
+</script>
+</body>
+</html>

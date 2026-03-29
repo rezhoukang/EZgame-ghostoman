@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>游戏设置 - 鬼追人</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+            font-family: Arial, 'Microsoft YaHei', sans-serif;
+        }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 800, H = 600;
+canvas.width = W; canvas.height = H;
+
+function resize() {
+    const s = Math.min(innerWidth / W, innerHeight / H);
+    canvas.style.width = W * s + 'px';
+    canvas.style.height = H * s + 'px';
+}
+addEventListener('resize', resize); resize();
+
+// 从 localStorage 读取设置
+const settings = {
+    music: localStorage.getItem('ghostMusic') !== 'false',
+    sfx: localStorage.getItem('ghostSfx') !== 'false'
+};
+
+function save() {
+    localStorage.setItem('ghostMusic', settings.music);
+    localStorage.setItem('ghostSfx', settings.sfx);
+}
+
+// 交互区域
+const toggles = [
+    { label: '🎵 背景音乐', y: 220, key: 'music' },
+    { label: '🔊 游戏音效', y: 320, key: 'sfx' },
+];
+const toggleX = 560, toggleW = 56, toggleH = 28;
+const backBtn = { x: W/2 - 100, y: H - 85, w: 200, h: 50 };
+
+let hoverBack = false;
+let hoverToggle = -1;
+
+function drawRR(x, y, w, h, r, fill, stroke) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+    if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); }
+}
+
+function loop() {
+    ctx.fillStyle = '#0a0a1a';
+    ctx.fillRect(0, 0, W, H);
+
+    // 网格背景
+    ctx.strokeStyle = 'rgba(155,89,182,.15)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+    for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+
+    // 标题
+    ctx.font = 'bold 42px Arial, Microsoft YaHei';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#9b59b6';
+    ctx.fillText('⚙️ 游戏设置', W / 2, 60);
+
+    // 分割线
+    ctx.strokeStyle = 'rgba(155,89,182,.4)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(150, 95); ctx.lineTo(650, 95); ctx.stroke();
+
+    // 开关项
+    toggles.forEach((item, i) => {
+        ctx.font = 'bold 26px Arial, Microsoft YaHei';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(item.label, 180, item.y);
+
+        const isOn = settings[item.key];
+        // 轨道
+        drawRR(toggleX - toggleW/2, item.y - toggleH/2, toggleW, toggleH, 14, isOn ? '#2ecc71' : '#444466');
+        // 边框高亮
+        if (hoverToggle === i) {
+            drawRR(toggleX - toggleW/2, item.y - toggleH/2, toggleW, toggleH, 14, null, 'rgba(255,255,255,.4)');
+        }
+        // 圆点
+        const knobX = isOn ? toggleX + toggleW/2 - 17 : toggleX - toggleW/2 + 17;
+        ctx.beginPath(); ctx.arc(knobX, item.y, 10, 0, 6.28);
+        ctx.fillStyle = '#fff'; ctx.fill();
+
+        // 状态文字
+        ctx.font = '16px Arial, Microsoft YaHei';
+        ctx.textAlign = 'left';
+        ctx.fillStyle = isOn ? '#2ecc71' : '#666';
+        ctx.fillText(isOn ? '开' : '关', toggleX + 40, item.y);
+    });
+
+    // 返回按钮
+    const sc = hoverBack ? 1.06 : 1;
+    ctx.save();
+    ctx.translate(W / 2, backBtn.y + backBtn.h / 2);
+    ctx.scale(sc, sc);
+    drawRR(-backBtn.w/2, -backBtn.h/2, backBtn.w, backBtn.h, 12, hoverBack ? '#af7ac5' : '#9b59b6');
+    if (hoverBack) drawRR(-backBtn.w/2, -backBtn.h/2, backBtn.w, backBtn.h, 12, null, 'rgba(255,255,255,.5)');
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 22px Arial, Microsoft YaHei';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('← 返回菜单', 0, 1);
+    ctx.restore();
+
+    requestAnimationFrame(loop);
+}
+
+function pos(e) {
+    const r = canvas.getBoundingClientRect();
+    return { x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height };
+}
+function inBack(mx, my) {
+    return mx >= backBtn.x && mx <= backBtn.x + backBtn.w && my >= backBtn.y && my <= backBtn.y + backBtn.h;
+}
+function hitToggle(mx, my) {
+    for (let i = 0; i < toggles.length; i++) {
+        const ty = toggles[i].y;
+        if (mx >= toggleX - toggleW/2 - 10 && mx <= toggleX + toggleW/2 + 10 &&
+            my >= ty - toggleH/2 - 10 && my <= ty + toggleH/2 + 10) return i;
+    }
+    return -1;
+}
+function doToggle(mx, my) {
+    const i = hitToggle(mx, my);
+    if (i >= 0) { settings[toggles[i].key] = !settings[toggles[i].key]; save(); }
+    if (inBack(mx, my)) location.replace('../鬼追人.html');
+}
+
+canvas.addEventListener('mousemove', e => {
+    const p = pos(e);
+    hoverBack = inBack(p.x, p.y);
+    hoverToggle = hitToggle(p.x, p.y);
+    canvas.style.cursor = (hoverBack || hoverToggle >= 0) ? 'pointer' : 'default';
+});
+canvas.addEventListener('click', e => { const p = pos(e); doToggle(p.x, p.y); });
+canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const tt = e.touches[0], r = canvas.getBoundingClientRect();
+    const p = { x: (tt.clientX - r.left) * W / r.width, y: (tt.clientY - r.top) * H / r.height };
+    doToggle(p.x, p.y);
+}, { passive: false });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') location.replace('../鬼追人.html'); });
+
+loop();
+</script>
+</body>
+</html>

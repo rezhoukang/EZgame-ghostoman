@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>游戏说明 - 鬼追人</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+            font-family: Arial, 'Microsoft YaHei', sans-serif;
+        }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 800, H = 600;
+canvas.width = W; canvas.height = H;
+
+function resize() {
+    const s = Math.min(innerWidth / W, innerHeight / H);
+    canvas.style.width = W * s + 'px';
+    canvas.style.height = H * s + 'px';
+}
+addEventListener('resize', resize); resize();
+
+let hoverBack = false;
+const backBtn = { x: W/2 - 100, y: H - 55, w: 200, h: 50 };
+
+function drawRR(x, y, w, h, r, fill, stroke) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+    if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); }
+}
+
+function loop() {
+    ctx.fillStyle = '#0a0a1a';
+    ctx.fillRect(0, 0, W, H);
+
+    // 网格背景
+    ctx.strokeStyle = 'rgba(52,152,219,.15)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+    for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+
+    // 标题
+    ctx.font = 'bold 42px Arial, Microsoft YaHei';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#3498db';
+    ctx.fillText('📖 游戏说明', W / 2, 45);
+
+    // 分割线
+    ctx.strokeStyle = 'rgba(52,152,219,.4)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(100, 78); ctx.lineTo(700, 78); ctx.stroke();
+
+    // ── 说明内容 ──
+    const items = [
+        { icon: '🖥️', title: '游戏画面',
+          desc: '屏幕分为左右两半，左边是鬼的视角，右边是人的视角' },
+        { icon: '🏃', title: '人的操作',
+          desc: '方向键 ↑ ↓ → 控制移动（地图向右延伸，← 基本用不上）' },
+        { icon: '👻', title: '鬼的操作',
+          desc: '键盘 W（上）A（左）S（下）D（右）控制移动' },
+        { icon: '⏱️', title: '游戏规则',
+          desc: '人先行动，鬼5秒后才能出发。每0.5秒可移动一次' },
+        { icon: '🏆', title: '胜负判定',
+          desc: '鬼追上人 → 鬼赢 ｜ 人存活60秒 → 人赢' },
+        { icon: '🗺️', title: '迷宫地图',
+          desc: '随机生成的迷宫，通道宽度为1格，需要找路前进' },
+    ];
+
+    items.forEach((item, i) => {
+        const yy = 115 + i * 68;
+
+        // 图标
+        ctx.font = '26px Arial';
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#fff';
+        ctx.fillText(item.icon, 80, yy + 4);
+
+        // 标题
+        ctx.font = 'bold 20px Arial, Microsoft YaHei';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(item.title, 125, yy - 8);
+
+        // 描述
+        ctx.font = '15px Arial, Microsoft YaHei';
+        ctx.fillStyle = '#8888aa';
+        ctx.fillText(item.desc, 125, yy + 18);
+    });
+
+    // 返回按钮
+    const sc = hoverBack ? 1.06 : 1;
+    ctx.save();
+    ctx.translate(W / 2, backBtn.y + backBtn.h / 2);
+    ctx.scale(sc, sc);
+    drawRR(-backBtn.w/2, -backBtn.h/2, backBtn.w, backBtn.h, 12, hoverBack ? '#5dade2' : '#3498db');
+    if (hoverBack) drawRR(-backBtn.w/2, -backBtn.h/2, backBtn.w, backBtn.h, 12, null, 'rgba(255,255,255,.5)');
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 22px Arial, Microsoft YaHei';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('← 返回菜单', 0, 1);
+    ctx.restore();
+
+    requestAnimationFrame(loop);
+}
+
+function pos(e) {
+    const r = canvas.getBoundingClientRect();
+    return { x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height };
+}
+function inBack(mx, my) {
+    return mx >= backBtn.x && mx <= backBtn.x + backBtn.w && my >= backBtn.y && my <= backBtn.y + backBtn.h;
+}
+canvas.addEventListener('mousemove', e => {
+    const p = pos(e); hoverBack = inBack(p.x, p.y);
+    canvas.style.cursor = hoverBack ? 'pointer' : 'default';
+});
+canvas.addEventListener('click', e => { const p = pos(e); if (inBack(p.x, p.y)) location.replace('../鬼追人.html'); });
+canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const tt = e.touches[0], r = canvas.getBoundingClientRect();
+    const p = { x: (tt.clientX - r.left) * W / r.width, y: (tt.clientY - r.top) * H / r.height };
+    if (inBack(p.x, p.y)) location.replace('../鬼追人.html');
+}, { passive: false });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') location.replace('../鬼追人.html'); });
+
+loop();
+</script>
+</body>
+</html>

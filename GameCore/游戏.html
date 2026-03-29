@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>鬼追人 - 游戏</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+            font-family: Arial, 'Microsoft YaHei', sans-serif;
+        }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ╔══════════════════════════════════════════════════════════════╗
+// ║                  🎮 游戏环境变量配置                          ║
+// ║        修改以下数值即可调整游戏参数，无需改动其他代码            ║
+// ║        改完保存后刷新浏览器即可生效                             ║
+// ╚══════════════════════════════════════════════════════════════╝
+
+const CONFIG = {
+
+    // ────────── 画布尺寸 ──────────
+    CANVAS_W:       800,    // 画布宽度（像素）
+    CANVAS_H:       600,    // 画布高度（像素）
+
+    // ────────── 迷宫参数 ──────────
+    CELL_SIZE:      30,     // 每格像素大小（越大格子越大）
+    MAZE_HEIGHT:    50,     // 迷宫总高度（最外层墙的高，含墙，自动调整为奇数）
+    MAZE_WIDTH:     50,     // 迷宫总宽度（最外层墙的宽，含墙，自动调整为奇数）
+    MIN_STRAIGHT:   2,      // 直道最短几步（最小2，如右右=2，右右右=3）
+    MAX_STRAIGHT:   5,      // 直道最长几步（最小2，2=最弯折，5=中等，10=长直道）
+
+    // ────────── 时间参数 ──────────
+    MOVE_COOLDOWN:  200,    // 移动冷却（毫秒）：每次移动后需等待的时间
+    GHOST_DELAY:    1000,   // 鬼延迟出发（毫秒）：人开始移动后鬼等待的时间
+    GAME_DURATION:  200,     // 游戏总时长（秒）：人存活这么久即获胜
+    HUMAN_STUN:     1500,    // 人撞墙眩晕时间（毫秒，0=不眩晕）
+    GHOST_STUN:     500,    // 鬼撞墙眩晕时间（毫秒，0=不眩晕）
+
+    // ────────── 界面参数 ──────────
+    STATUS_BAR_H:   50,     // 顶部状态栏高度（像素）
+    CAM_SMOOTH:     0.1,   // 镜头跟随平滑度（0~1，越大越灵敏）
+
+    // ────────── 角色外观 ──────────
+    HUMAN_LABEL:    '人',       // 人的显示名称
+    GHOST_LABEL:    '鬼',       // 鬼的显示名称
+    HUMAN_COLOR:    '#2ecc71',  // 人的颜色（绿色）
+    GHOST_COLOR:    '#e74c3c',  // 鬼的颜色（红色）
+
+    // ────────── 地图外观 ──────────
+    WALL_COLOR:     '#1a2744',  // 墙壁填充色
+    WALL_LIGHT:     '#243558',  // 墙壁高光（左上边缘）
+    WALL_DARK:      '#0f1a30',  // 墙壁阴影（右下边缘）
+    WALL_TEXT_COLOR: '#2a3a5a', // 墙壁上文字颜色
+    WALL_TEXT:      '墙',       // 墙壁上显示的文字（空字符串''则不显示）
+    PATH_COLOR:     '#0a0e18',  // 通道颜色
+
+    // ────────── 音频开关 ──────────
+    // 读取 localStorage 中的设置（游戏设置页面保存的值）
+    get MUSIC_ON()  { return localStorage.getItem('ghostMusic') !== 'false'; },
+    get SFX_ON()    { return localStorage.getItem('ghostSfx')   !== 'false'; },
+};
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║                  以下为游戏核心逻辑                           ║
+// ║              一般情况下不需要修改下面的代码                     ║
+// ╚══════════════════════════════════════════════════════════════╝
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = CONFIG.CANVAS_W, H = CONFIG.CANVAS_H;
+canvas.width = W; canvas.height = H;
+
+// ── 自适应缩放 ──
+function resize() {
+    const s = Math.min(innerWidth / W, innerHeight / H);
+    canvas.style.width = W * s + 'px';
+    canvas.style.height = H * s + 'px';
+}
+addEventListener('resize', resize); resize();
+
+// ── 派生常量（自动计算，勿改） ──
+const CS     = CONFIG.CELL_SIZE;
+const GR     = CONFIG.MAZE_HEIGHT | 1;   // 确保奇数（位或1）
+const GC     = CONFIG.MAZE_WIDTH  | 1;   // 确保奇数
+const MCR    = (GR - 1) / 2;             // 路径行数（自动算出）
+const MCC    = (GC - 1) / 2;             // 路径列数（自动算出）
+// 用户设的是"路径格数"，DFS每步连通2个路径格，所以streak = 格数-1
+// 例：右右=2格=streak1，右右右=3格=streak2
+const MIN_STEPS = Math.max(1, CONFIG.MIN_STRAIGHT - 1);
+const MAX_STEPS = Math.max(MIN_STEPS, CONFIG.MAX_STRAIGHT - 1);
+const BAR_H  = CONFIG.STATUS_BAR_H;
+const VW     = W / 2;                // 每侧视口宽度
+const VH     = H - BAR_H;           // 视口高度
+
+
+// ============================================================
+//  🔊 8-bit 音频系统（Web Audio API 生成芯片音效）
+// ============================================================
+let audioCtx = null;
+
+/** 初始化音频上下文（需要用户交互后才能创建） */
+function initAudio() {
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+
+/** 播放一个音符 */
+function playTone(freq, duration, type, volume, delay) {
+    if (!audioCtx || !CONFIG.SFX_ON) return;
+    const t = audioCtx.currentTime + (delay || 0);
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type || 'square';
+    osc.frequency.setValueAtTime(freq, t);
+    gain.gain.setValueAtTime(volume || 0.1, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + duration);
+}
+
+/** 移动音效 */
+function sfxMove() {
+    playTone(440, 0.08, 'square', 0.06);
+}
+
+/** 鬼激活音效 */
+function sfxGhostActive() {
+    playTone(220, 0.15, 'sawtooth', 0.1);
+    playTone(330, 0.15, 'sawtooth', 0.1, 0.15);
+    playTone(440, 0.2,  'sawtooth', 0.12, 0.3);
+}
+
+/** 鬼抓到人音效 */
+function sfxCatch() {
+    playTone(440, 0.12, 'square', 0.12);
+    playTone(330, 0.12, 'square', 0.12, 0.12);
+    playTone(220, 0.12, 'square', 0.12, 0.24);
+    playTone(110, 0.4,  'sawtooth', 0.15, 0.36);
+}
+
+/** 人逃脱成功音效 */
+function sfxWin() {
+    [523, 659, 784, 1047].forEach((f, i) => {
+        playTone(f, 0.15, 'square', 0.1, i * 0.12);
+    });
+}
+
+/** 撞墙眩晕音效 */
+function sfxStun() {
+    playTone(150, 0.12, 'sawtooth', 0.1);
+    playTone(100, 0.15, 'sawtooth', 0.08, 0.1);
+}
+
+/** 倒计时提示音 */
+function sfxTick() {
+    playTone(660, 0.06, 'square', 0.05);
+}
+
+// ── 8-bit 背景音乐 ──
+let bgmInterval = null;
+const BGM_NOTES = [
+    262, 294, 330, 262,   // C D E C
+    330, 349, 392, 0,     // E F G .
+    392, 440, 392, 349,   // G A G F
+    330, 262, 0, 0,       // E C . .
+    262, 196, 262, 0,     // C G3 C .
+    262, 196, 262, 0,     // C G3 C .
+];
+let bgmIdx = 0;
+
+function startBGM() {
+    if (bgmInterval) return;
+    bgmIdx = 0;
+    bgmInterval = setInterval(() => {
+        if (!CONFIG.MUSIC_ON || !audioCtx) return;
+        const note = BGM_NOTES[bgmIdx % BGM_NOTES.length];
+        if (note > 0) playTone(note, 0.18, 'triangle', 0.04);
+        bgmIdx++;
+    }, 280);
+}
+
+function stopBGM() {
+    if (bgmInterval) { clearInterval(bgmInterval); bgmInterval = null; }
+}
+
+
+// ============================================================
+//  🏗️ 迷宫生成（DFS + 直线长度限制）
+// ============================================================
+let maze = [];
+
+function genMaze() {
+    // 初始化全部为墙
+    maze = Array.from({ length: GR }, () => Array(GC).fill(1));
+
+    // 访问记录
+    const vis = Array.from({ length: MCR }, () => Array(MCC).fill(false));
+    const sr = Math.floor(MCR / 2);  // 起始行
+
+    vis[sr][0] = true;
+    maze[2 * sr + 1][1] = 0;         // 打通起点
+
+    // 栈：[行, 列, 上一步方向, 连续同方向计数]
+    const stack = [[sr, 0, null, 0]];
+
+    while (stack.length > 0) {
+        const [r, c, lastDir, streak] = stack[stack.length - 1];
+
+        // 四个方向：右、上、下、左
+        const dirs = [[0, 1], [-1, 0], [1, 0], [0, -1]];
+        let nbrs = dirs.filter(([dr, dc]) => {
+            const nr = r + dr, nc = c + dc;
+            return nr >= 0 && nr < MCR && nc >= 0 && nc < MCC && !vis[nr][nc];
+        });
+
+        if (nbrs.length === 0) { stack.pop(); continue; }
+
+        // ── 直线限制：streak达到MAX_STEPS时强制换方向 ──
+        if (lastDir !== null && streak >= MAX_STEPS) {
+            const filtered = nbrs.filter(([dr, dc]) =>
+                !(dr === lastDir[0] && dc === lastDir[1])
+            );
+            if (filtered.length > 0) nbrs = filtered;
+        }
+        // ── 最短直道：未达MIN_STEPS时强制继续同方向 ──
+        if (lastDir !== null && streak < MIN_STEPS) {
+            const sameDir = nbrs.filter(([dr, dc]) =>
+                dr === lastDir[0] && dc === lastDir[1]
+            );
+            if (sameDir.length > 0) nbrs = sameDir;
+        }
+
+        // 偏向右方向，迷宫自然向右延伸
+        let chosen;
+        const right = nbrs.filter(d => d[0] === 0 && d[1] === 1);
+        if (right.length > 0 && Math.random() < 0.4) {
+            chosen = right[0];
+        } else {
+            chosen = nbrs[Math.floor(Math.random() * nbrs.length)];
+        }
+
+        const [dr, dc] = chosen;
+        const nr = r + dr, nc = c + dc;
+        vis[nr][nc] = true;
+
+        // 打通路径格和连接墙
+        maze[2 * nr + 1][2 * nc + 1] = 0;
+        maze[2 * r + 1 + dr][2 * c + 1 + dc] = 0;
+
+        // 计算新的连续计数
+        const sameDir = lastDir && dr === lastDir[0] && dc === lastDir[1];
+        const newStreak = sameDir ? streak + 1 : 1;
+
+        stack.push([nr, nc, [dr, dc], newStreak]);
+    }
+}
+
+
+// ============================================================
+//  🎮 游戏状态
+// ============================================================
+let human, ghost;
+let gameState;       // 'waiting' | 'playing' | 'ghostWin' | 'humanWin'
+let countdownStart;  // 鬼倒计时开始时间（人第一次移动的时刻）
+let ghostActive;     // 鬼是否可以行动
+let lastTickSound;   // 上次倒计时提示音的秒数
+const keys = {};
+
+function init() {
+    genMaze();
+    const sy = Math.floor(MCR / 2) * 2 + 1;  // 起始行（网格坐标）
+
+    human = {
+        gx: 1, gy: sy, lastMove: 0, stunUntil: 0,
+        color: CONFIG.HUMAN_COLOR, label: CONFIG.HUMAN_LABEL,
+        camX: 0, camY: 0
+    };
+    ghost = {
+        gx: 1, gy: sy, lastMove: 0, stunUntil: 0,
+        color: CONFIG.GHOST_COLOR, label: CONFIG.GHOST_LABEL,
+        camX: 0, camY: 0
+    };
+
+    // 初始化相机位置
+    human.camX = human.gx * CS - VW / 2 + CS / 2;
+    human.camY = human.gy * CS - VH / 2 + CS / 2;
+    ghost.camX = ghost.gx * CS - VW / 2 + CS / 2;
+    ghost.camY = ghost.gy * CS - VH / 2 + CS / 2;
+
+    gameState = 'waiting';   // 等待人类操作
+    countdownStart = 0;
+    ghostActive = false;
+    lastTickSound = -1;
+
+    stopBGM();
+}
+
+
+// ============================================================
+//  ⌨️ 输入处理
+// ============================================================
+// 记录每个键最后按下的时间戳，用于判断唯一按键
+const keyDownTime = {};
+
+document.addEventListener('keydown', e => {
+    if (!keys[e.code]) keyDownTime[e.code] = Date.now();  // 仅首次按下记录时间
+    keys[e.code] = true;
+
+    // 阻止方向键滚动页面
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
+        e.preventDefault();
+    }
+
+    // 游戏结束后的操作
+    if (gameState === 'ghostWin' || gameState === 'humanWin') {
+        if (e.code === 'Enter' || e.code === 'Space') init();
+        if (e.code === 'Escape') location.replace('../鬼追人.html');
+        return;
+    }
+
+    // 等待状态：人按方向键 → 开始倒计时
+    if (gameState === 'waiting') {
+        if (['ArrowUp', 'ArrowDown', 'ArrowRight', 'ArrowLeft'].includes(e.code)) {
+            initAudio();
+            gameState = 'playing';
+            countdownStart = Date.now();
+            startBGM();
+        }
+    }
+});
+
+document.addEventListener('keyup', e => { keys[e.code] = false; delete keyDownTime[e.code]; });
+
+
+// ============================================================
+//  🚶 移动逻辑
+// ============================================================
+
+/** 尝试移动角色到 (gx+dx, gy+dy) */
+function tryMove(p, dx, dy) {
+    const nx = p.gx + dx, ny = p.gy + dy;
+    if (nx >= 0 && nx < GC && ny >= 0 && ny < GR && maze[ny][nx] === 0) {
+        p.gx = nx;
+        p.gy = ny;
+        p.lastMove = Date.now();
+        sfxMove();
+        return true;
+    }
+    // 撞墙 → 眩晕
+    const stunTime = (p === human) ? CONFIG.HUMAN_STUN : CONFIG.GHOST_STUN;
+    if (stunTime > 0) {
+        p.stunUntil = Date.now() + stunTime;
+        sfxStun();
+    }
+    return false;
+}
+
+/** 从一组方向键中找出唯一按下的键（多键同时按下返回null） */
+function getOnlyKey(keyCodes) {
+    const pressed = keyCodes.filter(k => keys[k]);
+    if (pressed.length !== 1) return null;  // 0个或多个按下都不移动
+    return pressed[0];
+}
+
+/** 方向键 → 移动映射 */
+const ARROW_MAP = {
+    'ArrowRight': [1, 0], 'ArrowLeft': [-1, 0],
+    'ArrowUp': [0, -1],   'ArrowDown': [0, 1]
+};
+const WASD_MAP = {
+    'KeyD': [1, 0], 'KeyA': [-1, 0],
+    'KeyW': [0, -1], 'KeyS': [0, 1]
+};
+
+/** 每帧检测键盘输入并移动 */
+function processInput() {
+    if (gameState !== 'playing') return;
+
+    const now = Date.now();
+
+    // 人：方向键（←↑↓→），眩晕中不能移动
+    if (now >= human.stunUntil && now - human.lastMove >= CONFIG.MOVE_COOLDOWN) {
+        const key = getOnlyKey(Object.keys(ARROW_MAP));
+        if (key) tryMove(human, ARROW_MAP[key][0], ARROW_MAP[key][1]);
+    }
+
+    // 鬼：WASD，眩晕中不能移动
+    if (ghostActive && now >= ghost.stunUntil && now - ghost.lastMove >= CONFIG.MOVE_COOLDOWN) {
+        const key = getOnlyKey(Object.keys(WASD_MAP));
+        if (key) tryMove(ghost, WASD_MAP[key][0], WASD_MAP[key][1]);
+    }
+}
+
+
+// ============================================================
+//  🔄 游戏更新
+// ============================================================
+function update() {
+    if (gameState === 'waiting' || gameState === 'ghostWin' || gameState === 'humanWin') return;
+
+    const elapsed = Date.now() - countdownStart;
+
+    // 鬼激活
+    if (!ghostActive && elapsed >= CONFIG.GHOST_DELAY) {
+        ghostActive = true;
+        sfxGhostActive();
+    }
+
+    // 倒计时提示音（最后10秒每秒响一次）
+    const remain = Math.max(0, CONFIG.GAME_DURATION - elapsed / 1000);
+    if (remain <= 10) {
+        const sec = Math.ceil(remain);
+        if (sec !== lastTickSound && sec > 0) {
+            lastTickSound = sec;
+            sfxTick();
+        }
+    }
+
+    processInput();
+
+    // 碰撞检测：鬼抓到人
+    if (ghostActive && human.gx === ghost.gx && human.gy === ghost.gy) {
+        gameState = 'ghostWin';
+        stopBGM();
+        sfxCatch();
+    }
+
+    // 时间到：人胜利
+    if (elapsed >= CONFIG.GAME_DURATION * 1000) {
+        gameState = 'humanWin';
+        stopBGM();
+        sfxWin();
+    }
+}
+
+
+// ============================================================
+//  🎨 渲染
+// ============================================================
+
+/** 绘制一侧的迷宫视口 */
+function drawView(vx, vy, vw, vh, focus, other) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(vx, vy, vw, vh);
+    ctx.clip();
+
+    // 相机平滑跟随
+    const tx = focus.gx * CS - vw / 2 + CS / 2;
+    const ty = focus.gy * CS - vh / 2 + CS / 2;
+    focus.camX += (tx - focus.camX) * CONFIG.CAM_SMOOTH;
+    focus.camY += (ty - focus.camY) * CONFIG.CAM_SMOOTH;
+
+    // 相机边界限制
+    const mazeW = GC * CS, mazeH = GR * CS;
+    let camX = focus.camX, camY = focus.camY;
+    if (mazeW <= vw) camX = -(vw - mazeW) / 2;
+    else             camX = Math.max(0, Math.min(mazeW - vw, camX));
+    if (mazeH <= vh) camY = -(vh - mazeH) / 2;
+    else             camY = Math.max(0, Math.min(mazeH - vh, camY));
+
+    const ox = vx - camX;
+    const oy = vy - camY;
+
+    // 绘制迷宫格子
+    const wallFont = `bold ${CS * 0.42}px Arial, Microsoft YaHei`;
+    for (let r = 0; r < GR; r++) {
+        for (let c = 0; c < GC; c++) {
+            const x = ox + c * CS;
+            const y = oy + r * CS;
+            // 视口裁剪优化
+            if (x + CS < vx || x > vx + vw || y + CS < vy || y > vy + vh) continue;
+
+            if (maze[r][c] === 1) {
+                // 墙壁 + 立体边缘
+                ctx.fillStyle = CONFIG.WALL_COLOR;
+                ctx.fillRect(x, y, CS, CS);
+                ctx.fillStyle = CONFIG.WALL_LIGHT;
+                ctx.fillRect(x, y, CS, 2);
+                ctx.fillRect(x, y, 2, CS);
+                ctx.fillStyle = CONFIG.WALL_DARK;
+                ctx.fillRect(x, y + CS - 2, CS, 2);
+                ctx.fillRect(x + CS - 2, y, 2, CS);
+                // 墙字
+                if (CONFIG.WALL_TEXT) {
+                    ctx.fillStyle = CONFIG.WALL_TEXT_COLOR;
+                    ctx.font = wallFont;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(CONFIG.WALL_TEXT, x + CS / 2, y + CS / 2 + 1);
+                }
+            } else {
+                // 通道
+                ctx.fillStyle = CONFIG.PATH_COLOR;
+                ctx.fillRect(x, y, CS, CS);
+            }
+        }
+    }
+
+    // 绘制角色（另一方半透明，焦点角色在上层）
+    drawChar(ox + other.gx * CS, oy + other.gy * CS, other, 0.5);
+    drawChar(ox + focus.gx * CS, oy + focus.gy * CS, focus, 1);
+
+    ctx.restore();
+}
+
+/** 绘制角色方块 */
+function drawChar(x, y, p, alpha) {
+    ctx.globalAlpha = alpha;
+    // 发光效果
+    ctx.shadowColor = p.color;
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(x + 3, y + 3, CS - 6, CS - 6);
+    ctx.shadowBlur = 0;
+    // 边框
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 3, y + 3, CS - 6, CS - 6);
+    // 文字标签（眩晕时显示💫）
+    const stunned = Date.now() < p.stunUntil;
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${CS * 0.55}px Arial, Microsoft YaHei`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(stunned ? '💫' : p.label, x + CS / 2, y + CS / 2 + 1);
+    ctx.globalAlpha = 1;
+}
+
+/** 绘制顶部状态栏 */
+function drawStatusBar() {
+    ctx.fillStyle = '#0d0d20';
+    ctx.fillRect(0, 0, W, BAR_H);
+    ctx.strokeStyle = '#222244';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, BAR_H); ctx.lineTo(W, BAR_H); ctx.stroke();
+
+    // 中间倒计时
+    let remain, elapsed;
+    if (gameState === 'waiting') {
+        remain = CONFIG.GAME_DURATION;
+        elapsed = 0;
+    } else {
+        elapsed = Math.min(Date.now() - countdownStart, CONFIG.GAME_DURATION * 1000);
+        remain = Math.max(0, CONFIG.GAME_DURATION - elapsed / 1000);
+    }
+    const mins = Math.floor(remain / 60);
+    const secs = Math.floor(remain % 60);
+
+    ctx.font = 'bold 30px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = remain <= 10 ? '#e74c3c' : remain <= 30 ? '#f39c12' : '#2ecc71';
+    ctx.fillText(`${mins}:${secs.toString().padStart(2, '0')}`, W / 2, BAR_H / 2);
+
+    // 进度条
+    const barW = 120, barH2 = 6;
+    const barX = W / 2 - barW / 2, barY = BAR_H - 10;
+    ctx.fillStyle = '#222';
+    ctx.fillRect(barX, barY, barW, barH2);
+    ctx.fillStyle = remain <= 10 ? '#e74c3c' : remain <= 30 ? '#f39c12' : '#2ecc71';
+    ctx.fillRect(barX, barY, barW * (remain / CONFIG.GAME_DURATION), barH2);
+
+    // ── 左侧：鬼信息 ──
+    const gLabel = CONFIG.GHOST_LABEL;
+    ctx.textAlign = 'left';
+    if (gameState === 'waiting') {
+        ctx.fillStyle = '#666';
+        ctx.font = 'bold 16px Arial, Microsoft YaHei';
+        ctx.fillText(`${gLabel} [WASD] 等待中`, 15, BAR_H / 2 - 4);
+    } else if (!ghostActive) {
+        const wait = Math.ceil(Math.max(0, CONFIG.GHOST_DELAY - elapsed) / 1000);
+        ctx.fillStyle = '#666';
+        ctx.font = 'bold 16px Arial, Microsoft YaHei';
+        ctx.fillText(`${gLabel} [WASD] ${wait}秒后出发`, 15, BAR_H / 2 - 4);
+    } else {
+        ctx.fillStyle = '#e74c3c';
+        ctx.font = 'bold 16px Arial, Microsoft YaHei';
+        const gStunned = Date.now() < ghost.stunUntil;
+        ctx.fillText(`${gLabel} [WASD]${gStunned ? ' 💫' : ''}`, 15, BAR_H / 2 - 4);
+        // 能量条（眩晕时从空到满恢复，正常时显示冷却）
+        let ghostCD, ghostBarColor;
+        const gnow = Date.now();
+        if (gStunned) {
+            ghostCD = Math.min(1, 1 - (ghost.stunUntil - gnow) / CONFIG.GHOST_STUN);
+            ghostBarColor = '#ff6600';  // 橙色=眩晕恢复
+        } else {
+            ghostCD = Math.min(1, (gnow - ghost.lastMove) / CONFIG.MOVE_COOLDOWN);
+            ghostBarColor = '#e74c3c';
+        }
+        ctx.fillStyle = '#3a1a1a';
+        ctx.fillRect(15, BAR_H / 2 + 10, 80, 4);
+        ctx.fillStyle = ghostBarColor;
+        ctx.fillRect(15, BAR_H / 2 + 10, 80 * ghostCD, 4);
+    }
+
+    // ── 右侧：人信息 ──
+    const hLabel = CONFIG.HUMAN_LABEL;
+    const hStunned = Date.now() < human.stunUntil;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#2ecc71';
+    ctx.font = 'bold 16px Arial, Microsoft YaHei';
+    ctx.fillText(`${hLabel} [←↑↓→]${hStunned ? ' 💫' : ''}`, W - 15, BAR_H / 2 - 4);
+    // 能量条（眩晕时从空到满恢复，正常时显示冷却）
+    let humanCD, humanBarColor;
+    const hnow = Date.now();
+    if (hStunned) {
+        humanCD = Math.min(1, 1 - (human.stunUntil - hnow) / CONFIG.HUMAN_STUN);
+        humanBarColor = '#ff6600';  // 橙色=眩晕恢复
+    } else {
+        humanCD = Math.min(1, (hnow - human.lastMove) / CONFIG.MOVE_COOLDOWN);
+        humanBarColor = '#2ecc71';
+    }
+    ctx.fillStyle = '#1a3a2a';
+    ctx.fillRect(W - 95, BAR_H / 2 + 10, 80, 4);
+    ctx.fillStyle = humanBarColor;
+    ctx.fillRect(W - 95, BAR_H / 2 + 10, 80 * humanCD, 4);
+}
+
+/** 等待人类操作 — 鬼侧遮罩 */
+function drawWaitingOverlay() {
+    // 鬼在左侧，显示等待遮罩
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, BAR_H, VW - 1, VH);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#e74c3c';
+    ctx.font = 'bold 32px Arial, Microsoft YaHei';
+    ctx.fillText(`等待${CONFIG.HUMAN_LABEL}操作`, VW / 2, BAR_H + VH / 2 - 20);
+
+    ctx.fillStyle = '#888';
+    ctx.font = '18px Arial, Microsoft YaHei';
+    ctx.fillText(`${CONFIG.HUMAN_LABEL}按方向键后开始计时`, VW / 2, BAR_H + VH / 2 + 25);
+}
+
+/** 鬼倒计时遮罩 */
+function drawGhostCountdown() {
+    if (ghostActive || gameState !== 'playing') return;
+    const elapsed = Date.now() - countdownStart;
+    const wait = Math.ceil(Math.max(0, CONFIG.GHOST_DELAY - elapsed) / 1000);
+
+    // 左侧（鬼侧）半透明遮罩
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, BAR_H, VW - 1, VH);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // 大数字倒计时
+    ctx.fillStyle = '#e74c3c';
+    ctx.font = 'bold 90px Arial';
+    ctx.fillText(wait, VW / 2, BAR_H + VH / 2 - 15);
+
+    ctx.fillStyle = '#aaa';
+    ctx.font = '22px Arial, Microsoft YaHei';
+    ctx.fillText('准备追击...', VW / 2, BAR_H + VH / 2 + 55);
+}
+
+/** 游戏结束画面 */
+function drawGameOver() {
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const elapsed = Math.min(Date.now() - countdownStart, CONFIG.GAME_DURATION * 1000);
+    const timeTxt = `用时 ${Math.floor(elapsed / 1000)} 秒`;
+
+    if (gameState === 'ghostWin') {
+        ctx.fillStyle = '#e74c3c';
+        ctx.font = 'bold 64px Arial, Microsoft YaHei';
+        ctx.fillText(`👻 ${CONFIG.GHOST_LABEL}抓到${CONFIG.HUMAN_LABEL}了！`, W / 2, H / 2 - 50);
+    } else {
+        ctx.fillStyle = '#2ecc71';
+        ctx.font = 'bold 64px Arial, Microsoft YaHei';
+        ctx.fillText(`🏃 ${CONFIG.HUMAN_LABEL}逃脱成功！`, W / 2, H / 2 - 50);
+    }
+
+    ctx.fillStyle = '#888';
+    ctx.font = '22px Arial, Microsoft YaHei';
+    ctx.fillText(timeTxt, W / 2, H / 2 + 20);
+
+    ctx.fillStyle = '#aaa';
+    ctx.font = '18px Arial, Microsoft YaHei';
+    ctx.fillText('Enter 重新开始 ｜ ESC 返回菜单 ｜ 点击重玩', W / 2, H / 2 + 65);
+}
+
+/** 主绘制函数 */
+function draw() {
+    ctx.fillStyle = '#0a0a1a';
+    ctx.fillRect(0, 0, W, H);
+
+    drawStatusBar();
+
+    // ── 左视口：鬼 ──
+    drawView(0, BAR_H, VW - 1, VH, ghost, human);
+
+    // ── 右视口：人 ──
+    drawView(VW + 1, BAR_H, VW - 1, VH, human, ghost);
+
+    // 分隔线
+    ctx.fillStyle = '#333366';
+    ctx.fillRect(VW - 1, BAR_H, 2, VH);
+
+    // 遮罩层
+    if (gameState === 'waiting') {
+        drawWaitingOverlay();
+    } else {
+        drawGhostCountdown();
+    }
+
+    // 结束画面
+    if (gameState === 'ghostWin' || gameState === 'humanWin') {
+        drawGameOver();
+    }
+}
+
+
+// ============================================================
+//  🔁 主循环
+// ============================================================
+function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+
+// ============================================================
+//  👆 点击 / 触摸事件
+// ============================================================
+canvas.addEventListener('click', () => {
+    if (gameState === 'ghostWin' || gameState === 'humanWin') init();
+});
+canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (gameState === 'ghostWin' || gameState === 'humanWin') init();
+}, { passive: false });
+
+
+// ============================================================
+//  🚀 启动游戏
+// ============================================================
+init();
+loop();
+</script>
+</body>
+</html>
